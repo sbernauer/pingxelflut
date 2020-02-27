@@ -173,6 +173,7 @@ int main(int argc, char **argv)
 
 	// poll_stats(map_fd, 2);
 	int size = sizeof(struct framebuffer);
+	size = getpagesize();
 	printf("size: %u\n", size);
 	struct framebuffer* foo;
 	foo = mmap(NULL, size, PROT_READ, MAP_SHARED, map_fd, 0);
