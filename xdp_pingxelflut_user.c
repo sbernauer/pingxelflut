@@ -13,10 +13,18 @@
 #include <libgen.h>
 #include <sys/resource.h>
 #include <net/if.h>
+#include <sys/mman.h>
 
 #include "bpf_util.h"
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+
+#define WIDTH 1280
+#define HEIGHT 720
+
+struct framebuffer {
+	int data[WIDTH * HEIGHT];
+};
 
 static int ifindex;
 static __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST;
@@ -50,7 +58,7 @@ static void poll_stats(int map_fd, int interval)
 	while (1) {
 		__u32 key = UINT32_MAX;
 
-		sleep(interval);
+		sleep(interval / 10);
 
 		while (bpf_map_get_next_key(map_fd, &key, &key) != -1) {
 			__u64 sum = 0;
@@ -79,6 +87,8 @@ static void usage(const char *prog)
 
 int main(int argc, char **argv)
 {
+	printf("Hello world\n");
+
 	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	struct bpf_prog_load_attr prog_load_attr = {
 		.prog_type	= BPF_PROG_TYPE_XDP,
@@ -161,7 +171,45 @@ int main(int argc, char **argv)
 	}
 	prog_id = info.id;
 
-	poll_stats(map_fd, 2);
+	// poll_stats(map_fd, 2);
+	int size = sizeof(struct framebuffer);
+	printf("size: %u\n", size);
+	struct framebuffer* foo;
+	foo = mmap(NULL, size, PROT_READ, MAP_SHARED, map_fd, 0);
+	if (foo == MAP_FAILED) {
+		printf("[ERROR] mmap failed: %d\n", errno);
+		return -1;
+	}
+//	bss_mmaped = mmap(NULL, bss_sz, PROT_READ | PROT_WRITE, MAP_SHARED,
+//			  bpf_map__fd(bss_map), 0);
+//	if (CHECK(bss_mmaped == MAP_FAILED, "bss_mmap",
+//		  ".bss mmap failed: %d\n", errno)) {
+//		bss_mmaped = NULL;
+//		goto cleanup;
+//	}
+
+	// if(fcntl(map_fd, map_fd) != -1 || errno != EBADF) {
+	// 	printf("Valid filedescriptor\n");
+	// }
+
+	for(int i = 0; i < 50; i++) {
+		int index = 0;
+		int value;
+
+		//int foo_value = *foo;
+		for (int i = 0; i < 10; i++) {
+			index = i;
+			bpf_map_lookup_elem(map_fd, &index, &value);
+			printf("value via bpf_map_lookup_elem for %u: %0x\n", i, value);
+			printf("value via mmap for %u:                %0x\n", i, foo->data[i]);
+		}
+		for (int i = WIDTH * HEIGHT - 10; i < WIDTH * HEIGHT; i++) {
+			printf("value via mmap for %u:                %0x\n", i, foo->data[i]);
+		}
+		printf("\n");
+
+		sleep(1);
+	}
 
 	return 0;
 }

@@ -14,80 +14,70 @@
 #include <linux/ipv6.h>
 #include <bpf/bpf_helpers.h>
 
+#define WIDTH 1280
+#define HEIGHT 720
+
+// struct {
+// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+// 	__type(key, u32);
+// 	__type(value, long);
+// 	__uint(max_entries, 256);
+// } rxcnt SEC(".maps");
+
 struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
-	__type(value, long);
-	__uint(max_entries, 256);
-} rxcnt SEC(".maps");
-
-static int parse_ipv4(void *data, u64 nh_off, void *data_end)
-{
-	struct iphdr *iph = data + nh_off;
-
-	if (iph + 1 > data_end)
-		return 0;
-	return iph->protocol;
-}
-
-static int parse_ipv6(void *data, u64 nh_off, void *data_end)
-{
-	struct ipv6hdr *ip6h = data + nh_off;
-
-	if (ip6h + 1 > data_end)
-		return 0;
-	return ip6h->nexthdr;
-}
+	__type(value, u32);
+	__uint(max_entries, WIDTH * HEIGHT);
+} framebuffer SEC(".maps");
 
 SEC("xdp1")
 int xdp_prog1(struct xdp_md *ctx)
 {
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
-	struct ethhdr *eth = data;
-	int rc = XDP_DROP;
-	long *value;
-	u16 h_proto;
-	u64 nh_off;
-	u32 ipproto;
+    //return XDP_DROP;
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+    struct ethhdr *eth = data;
+    struct ipv6hdr *ip6h;
+    u64 nh_off;
 
-	nh_off = sizeof(*eth);
-	if (data + nh_off > data_end)
-		return rc;
+    u32 x, y, rgb;
 
-	h_proto = eth->h_proto;
+    nh_off = sizeof(*eth);
+    if (unlikely(data + nh_off > data_end)) // Is needed because of verifier
+        return XDP_DROP;
 
-	if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
-		struct vlan_hdr *vhdr;
+    if (eth->h_proto == htons(ETH_P_IPV6)) {
+        ip6h = data + nh_off;
+        if (ip6h + 1 > data_end) // Is needed because of verifier
+            return XDP_DROP;
 
-		vhdr = data + nh_off;
-		nh_off += sizeof(struct vlan_hdr);
-		if (data + nh_off > data_end)
-			return rc;
-		h_proto = vhdr->h_vlan_encapsulated_proto;
-	}
-	if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
-		struct vlan_hdr *vhdr;
+        // if (ip6h->hop_limit <= 1)
+        //     return XDP_PASS;
 
-		vhdr = data + nh_off;
-		nh_off += sizeof(struct vlan_hdr);
-		if (data + nh_off > data_end)
-			return rc;
-		h_proto = vhdr->h_vlan_encapsulated_proto;
-	}
+        // struct in6_addr src = ip6h->saddr;
+        struct in6_addr dst = ip6h->daddr;
+        void* pointToStartOfIp6 = &dst;
 
-	if (h_proto == htons(ETH_P_IP))
-		ipproto = parse_ipv4(data, nh_off, data_end);
-	else if (h_proto == htons(ETH_P_IPV6))
-		ipproto = parse_ipv6(data, nh_off, data_end);
-	else
-		ipproto = 0;
+        x = (*((u8 *)(pointToStartOfIp6 + 8)) << 8) | (*((u8 *)(pointToStartOfIp6 + 9))); // Flip the first to byte, format is now left to right 00 00 ll hh, attention: byte order is opposite direction whe looking with 'bpftool map dump'
+        y = (*((u8 *)(pointToStartOfIp6 + 10)) << 8) | (*((u8 *)(pointToStartOfIp6 + 11))); // Same for y
+        rgb = (*((u8 *)(pointToStartOfIp6 + 12)) << 24) | (*((u8 *)(pointToStartOfIp6 + 13)) << 16) | (*((u8 *)(pointToStartOfIp6 + 14)) << 8); // Ignore last part of rrggbb>>>padding<<< | (*((u8 *)(pointToStartOfIp6 + 15)));
 
-	value = bpf_map_lookup_elem(&rxcnt, &ipproto);
-	if (value)
-		*value += 1;
+        if ( x >= WIDTH || y >= HEIGHT) {
+            return XDP_DROP;
+        }
+        u32 index = x + y * WIDTH;
+        //return XDP_DROP;
 
-	return rc;
+
+        bpf_map_update_elem(&framebuffer, &index, &rgb, BPF_ANY);
+        index = 0;
+        rgb = 0xffffffff;
+        bpf_map_update_elem(&framebuffer, &index, &rgb, BPF_ANY);
+    }
+
+    return XDP_PASS; // TODO Change to XDP_DROP to ignore all traffic on the port to get max processing speed.
+                     // Keep it for now for debugging purpose
 }
 
 char _license[] SEC("license") = "GPL";
