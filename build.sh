@@ -5,9 +5,9 @@
 git clone --depth 10 https://github.com/torvalds/linux
 
 cd linux
-make localmodconfig
+make allyesconfig
 make prepare
-make headers_install 
+make headers_install
 
 cd samples/bpf
 make
@@ -28,5 +28,5 @@ make
 # Build helper tools
 ## Build bpftool
 cd ../../..
-cd tools/bpf/bpftool
+cd linux/tools/bpf/bpftool
 make
