@@ -1,9 +1,3 @@
-/* Copyright (c) 2016 PLUMgrid
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of version 2 of the GNU General Public
- * License as published by the Free Software Foundation.
- */
 #define KBUILD_MODNAME "foo"
 #include <uapi/linux/bpf.h>
 #include <linux/in.h>
@@ -17,18 +11,12 @@
 #define WIDTH 1280
 #define HEIGHT 720
 
-// struct {
-// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-// 	__type(key, u32);
-// 	__type(value, long);
-// 	__uint(max_entries, 256);
-// } rxcnt SEC(".maps");
-
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u32);
 	__uint(max_entries, WIDTH * HEIGHT);
+	__uint(map_flags, BPF_F_MMAPABLE); // Needed to mmap this map later on in userspace
 } framebuffer SEC(".maps");
 
 SEC("xdp1")
