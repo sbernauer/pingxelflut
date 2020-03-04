@@ -6,10 +6,12 @@
 ## Build linux BPF samples
 git clone --depth 10 https://github.com/torvalds/linux
 
+num_cpus=$(nproc --all)
+
 cd linux
-make allyesconfig
-make prepare
-make headers_install
+make -j $num_cpus allyesconfig
+make -j $num_cpus prepare
+make -j $num_cpus headers_install
 
 cd samples/bpf
 make
@@ -25,10 +27,10 @@ sed -i -e 's/xdp1-objs := xdp1_user.o/xdp_pingxelflut-objs := xdp_pingxelflut_us
 sed -i -e 's/always-y += xdp1_kern.o/always-y += xdp_pingxelflut_kern.o\nalways-y += xdp1_kern.o/' Makefile
 
 ## Build pingxelflut kernel and userspace programs
-make
+make -j $num_cpus
 
 # Build helper tools
 ## Build bpftool
 cd ../../..
 cd linux/tools/bpf/bpftool
-make
+make -j $num_cpus
