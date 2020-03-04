@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# pacman -S make clang llvm base-devel flex bison bc python
+
 # Build pingxelflut
 ## Build linux BPF samples
 git clone --depth 10 https://github.com/torvalds/linux
