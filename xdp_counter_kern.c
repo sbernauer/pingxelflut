@@ -39,8 +39,8 @@ static int parse_ipv6(void *data, u64 nh_off, void *data_end)
 	return ip6h->nexthdr;
 }
 
-SEC("xdp1")
-int xdp_prog1(struct xdp_md *ctx)
+SEC("xdp_counter")
+int xdp_prog_counter(struct xdp_md *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
