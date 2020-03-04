@@ -58,7 +58,7 @@ static void poll_stats(int map_fd, int interval)
 			assert(bpf_map_lookup_elem(map_fd, &key, values) == 0);
 			for (i = 0; i < nr_cpus; i++)
 				sum += values[i];
-			if (sum > prev[key])
+			// if (sum > prev[key])
 				printf("proto %u: %10llu pkt/s\n",
 				       key, (sum - prev[key]) / interval);
 			prev[key] = sum;

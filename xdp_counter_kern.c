@@ -14,12 +14,12 @@
 #include <linux/ipv6.h>
 #include <bpf/bpf_helpers.h>
 
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__type(key, u32);
-	__type(value, long);
-	__uint(max_entries, 256);
-} rxcnt SEC(".maps");
+struct bpf_map_def SEC("maps") rxcnt = {
+        .type = BPF_MAP_TYPE_PERCPU_HASH,
+        .key_size = sizeof(u32),
+        .value_size = sizeof(long),
+        .max_entries = 256,
+};
 
 static int parse_ipv4(void *data, u64 nh_off, void *data_end)
 {
@@ -84,8 +84,13 @@ int xdp_prog1(struct xdp_md *ctx)
 		ipproto = 0;
 
 	value = bpf_map_lookup_elem(&rxcnt, &ipproto);
-	if (value)
+	if (value) {
 		*value += 1;
+	} else {
+		long new = 1;
+		bpf_map_update_elem(&rxcnt, &ipproto, &new, BPF_ANY);
+	}
+
 
 	return rc;
 }
