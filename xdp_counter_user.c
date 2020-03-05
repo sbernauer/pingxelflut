@@ -54,7 +54,7 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, char* iface_name, int i
 	while (1) {
 		printf("\e[1;1H\e[2J");
 		printf("Counting destination IP-Addresses of all IP packets on interface %s\n\n", iface_name);
-		printf("|== IPv4 =================================|=================|\n");
+		printf("|== IPv4 =================================|===================|\n");
 		__u32 key_ipv4 = UINT32_MAX;
 		while (bpf_map_get_next_key(map_fd_ipv4, &key_ipv4, &key_ipv4) != -1) {
 			sum = 0;
@@ -62,12 +62,14 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, char* iface_name, int i
 			assert(bpf_map_lookup_elem(map_fd_ipv4, &key_ipv4, values) == 0);
 			for (i = 0; i < nr_cpus; i++) {
 				sum += values[i];
+				values[i] = 0;
 			}
+			bpf_map_update_elem(map_fd_ipv4, &key_ipv4, values, BPF_ANY);
 			inet_ntop(AF_INET, &key_ipv4, str_ipv4, INET_ADDRSTRLEN);
-			printf("| %39s | %10llu pkts |\n", str_ipv4, sum); // 8 * 4 + 7 = max 39 digits for Ipv6 address
+			printf("| %39s | %10llu pkts/s |\n", str_ipv4, sum); // 8 * 4 + 7 = max 39 digits for Ipv6 address
 		}
 
-		printf("|== IPv6 =================================|=================|\n");
+		printf("|== IPv6 =================================|===================|\n");
 		struct in6_addr key_ipv6;
 		memset(&key_ipv6, 0xff, sizeof(key_ipv6));
 		while (bpf_map_get_next_key(map_fd_ipv6, &key_ipv6, &key_ipv6) != -1) {
@@ -76,11 +78,13 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, char* iface_name, int i
 			assert(bpf_map_lookup_elem(map_fd_ipv6, &key_ipv6, values) == 0);
 			for (i = 0; i < nr_cpus; i++) {
 				sum += values[i];
+				values[i] = 0;
 			}
+			bpf_map_update_elem(map_fd_ipv6, &key_ipv6, values, BPF_ANY);
 			inet_ntop(AF_INET6, &key_ipv6, str_ipv6, INET6_ADDRSTRLEN);
-			printf("| %39s | %10llu pkts |\n", str_ipv6, sum);
+			printf("| %39s | %10llu pkts/s |\n", str_ipv6, sum);
 		}
-		printf("|=========================================|=================|\n");
+		printf("|=========================================|===================|\n");
 
 
 		sleep(interval);
