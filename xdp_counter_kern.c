@@ -45,7 +45,7 @@ int xdp_prog_counter(struct xdp_md *ctx)
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	struct ethhdr *eth = data;
-	int rc = XDP_DROP;
+	int rc = XDP_PASS;
 	long *value;
 	u16 h_proto;
 	u64 nh_off;
@@ -76,21 +76,25 @@ int xdp_prog_counter(struct xdp_md *ctx)
 		h_proto = vhdr->h_vlan_encapsulated_proto;
 	}
 
-	if (h_proto == htons(ETH_P_IP))
-		ipproto = parse_ipv4(data, nh_off, data_end);
-	else if (h_proto == htons(ETH_P_IPV6))
+	if (h_proto == htons(ETH_P_IP)) {
+		struct iphdr *iph = data + nh_off;
+
+		if (iph + 1 > data_end)
+			return rc;
+		ipproto = iph->protocol;
+		u32 saddr = iph->saddr;
+
+		value = bpf_map_lookup_elem(&rxcnt, &saddr);
+		if (value) {
+			*value += 1;
+		} else {
+			long new = 1;
+			bpf_map_update_elem(&rxcnt, &saddr, &new, BPF_ANY);
+		}
+
+	} else if (h_proto == htons(ETH_P_IPV6)) {
 		ipproto = parse_ipv6(data, nh_off, data_end);
-	else
-		ipproto = 0;
-
-	value = bpf_map_lookup_elem(&rxcnt, &ipproto);
-	if (value) {
-		*value += 1;
-	} else {
-		long new = 1;
-		bpf_map_update_elem(&rxcnt, &ipproto, &new, BPF_ANY);
 	}
-
 
 	return rc;
 }

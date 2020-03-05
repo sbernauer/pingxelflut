@@ -13,6 +13,7 @@
 #include <libgen.h>
 #include <sys/resource.h>
 #include <net/if.h>
+#include <arpa/inet.h>
 
 #include "bpf_util.h"
 #include <bpf/bpf.h>
@@ -46,6 +47,7 @@ static void poll_stats(int map_fd, int interval)
 	unsigned int nr_cpus = bpf_num_possible_cpus();
 	__u64 values[nr_cpus], prev[UINT8_MAX] = { 0 };
 	int i;
+	char str[INET_ADDRSTRLEN];
 
 	while (1) {
 		__u32 key = UINT32_MAX;
@@ -56,12 +58,11 @@ static void poll_stats(int map_fd, int interval)
 			__u64 sum = 0;
 
 			assert(bpf_map_lookup_elem(map_fd, &key, values) == 0);
-			for (i = 0; i < nr_cpus; i++)
+			for (i = 0; i < nr_cpus; i++) {
 				sum += values[i];
-			// if (sum > prev[key])
-				printf("proto %u: %10llu pkt/s\n",
-				       key, (sum - prev[key]) / interval);
-			prev[key] = sum;
+			}
+			inet_ntop(AF_INET, &key, str, INET_ADDRSTRLEN);
+			printf("ip %s: %10llu pkts\n", str, (sum - prev[key]) / interval);
 		}
 	}
 }
