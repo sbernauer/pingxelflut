@@ -23,7 +23,7 @@ else
 	## Build bpftool
 	cd ../../tools/bpf/bpftool
 	make -j $num_cpus
-	cd ../../..
+	cd ../../../..
 fi
 
 ## Copy pingxelflut to linux kernel source
