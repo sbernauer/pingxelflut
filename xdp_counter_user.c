@@ -54,7 +54,7 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, int interval)
 	while (1) {
 		printf("\e[1;1H\e[2J");
 		printf("Counting destination IP-Addresses of all IP packets\n\n");
-		printf("=== IPv4 =================================|=================|\n");
+		printf("|== IPv4 =================================|=================|\n");
 		__u32 key_ipv4 = UINT32_MAX;
 		while (bpf_map_get_next_key(map_fd_ipv4, &key_ipv4, &key_ipv4) != -1) {
 			sum = 0;
@@ -67,7 +67,7 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, int interval)
 			printf("| %39s | %10llu pkts |\n", str_ipv4, sum); // 8 * 4 + 7 = max 39 digits for Ipv6 address
 		}
 
-		printf("=== IPv6 =================================|=================|\n");
+		printf("|== IPv6 =================================|=================|\n");
 		struct in6_addr key_ipv6;
 		memset(&key_ipv6, 0xff, sizeof(key_ipv6));
 		while (bpf_map_get_next_key(map_fd_ipv6, &key_ipv6, &key_ipv6) != -1) {
@@ -80,7 +80,7 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, int interval)
 			inet_ntop(AF_INET6, &key_ipv6, str_ipv6, INET6_ADDRSTRLEN);
 			printf("| %39s | %10llu pkts |\n", str_ipv6, sum);
 		}
-		printf("==========================================|=================|\n");
+		printf("|=========================================|=================|\n");
 
 
 		sleep(interval);
