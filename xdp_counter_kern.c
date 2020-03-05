@@ -14,11 +14,18 @@
 #include <linux/ipv6.h>
 #include <bpf/bpf_helpers.h>
 
-struct bpf_map_def SEC("maps") rxcnt = {
+struct bpf_map_def SEC("maps") rxcnt_ipv4 = {
         .type = BPF_MAP_TYPE_PERCPU_HASH,
         .key_size = sizeof(u32),
         .value_size = sizeof(long),
-        .max_entries = 256,
+        .max_entries = 1000000,
+};
+
+struct bpf_map_def SEC("maps") rxcnt_ipv6 = {
+        .type = BPF_MAP_TYPE_PERCPU_HASH,
+        .key_size = sizeof(struct in6_addr),
+        .value_size = sizeof(long),
+        .max_entries = 1000000,
 };
 
 static int parse_ipv4(void *data, u64 nh_off, void *data_end)
@@ -82,18 +89,30 @@ int xdp_prog_counter(struct xdp_md *ctx)
 		if (iph + 1 > data_end)
 			return rc;
 		ipproto = iph->protocol;
-		u32 saddr = iph->saddr;
+		u32 daddr = iph->daddr;
 
-		value = bpf_map_lookup_elem(&rxcnt, &saddr);
+		value = bpf_map_lookup_elem(&rxcnt_ipv4, &daddr);
 		if (value) {
 			*value += 1;
 		} else {
 			long new = 1;
-			bpf_map_update_elem(&rxcnt, &saddr, &new, BPF_ANY);
+			bpf_map_update_elem(&rxcnt_ipv4, &daddr, &new, BPF_ANY);
 		}
-
 	} else if (h_proto == htons(ETH_P_IPV6)) {
-		ipproto = parse_ipv6(data, nh_off, data_end);
+		struct ipv6hdr *ip6h = data + nh_off;
+
+		if (ip6h + 1 > data_end)
+			return rc;
+		ipproto = ip6h->nexthdr;
+		struct in6_addr daddr = ip6h->daddr;
+
+		value = bpf_map_lookup_elem(&rxcnt_ipv6, &daddr);
+		if (value) {
+			*value += 1;
+		} else {
+			long new = 1;
+			bpf_map_update_elem(&rxcnt_ipv6, &daddr, &new, BPF_ANY);
+		}
 	}
 
 	return rc;

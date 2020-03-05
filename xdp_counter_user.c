@@ -42,28 +42,45 @@ static void int_exit(int sig)
 
 /* simple per-protocol drop counter
  */
-static void poll_stats(int map_fd, int interval)
+static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, int interval)
 {
 	unsigned int nr_cpus = bpf_num_possible_cpus();
-	__u64 values[nr_cpus], prev[UINT8_MAX] = { 0 };
+	__u64 values[nr_cpus];
+	__u64 sum = 0;
 	int i;
-	char str[INET_ADDRSTRLEN];
+	char str_ipv4[INET_ADDRSTRLEN];
+	char str_ipv6[INET_ADDRSTRLEN];
 
 	while (1) {
-		__u32 key = UINT32_MAX;
+		printf("\n\n============\n\n");
+		printf("=== IPv4 ===\n");
+		__u32 key_ipv4 = UINT32_MAX;
+		while (bpf_map_get_next_key(map_fd_ipv4, &key_ipv4, &key_ipv4) != -1) {
+			sum = 0;
 
-		sleep(interval);
-
-		while (bpf_map_get_next_key(map_fd, &key, &key) != -1) {
-			__u64 sum = 0;
-
-			assert(bpf_map_lookup_elem(map_fd, &key, values) == 0);
+			assert(bpf_map_lookup_elem(map_fd_ipv4, &key_ipv4, values) == 0);
 			for (i = 0; i < nr_cpus; i++) {
 				sum += values[i];
 			}
-			inet_ntop(AF_INET, &key, str, INET_ADDRSTRLEN);
-			printf("ip %s: %10llu pkts\n", str, (sum - prev[key]) / interval);
+			inet_ntop(AF_INET, &key_ipv4, str_ipv4, INET_ADDRSTRLEN);
+			printf("%39s %llu pkts\n", str_ipv4, sum); // 8 * 4 + 7 = max 39 digits for Ipv6 address
 		}
+
+		printf("=== IPv6 ===\n");
+		struct in6_addr key_ipv6;
+		memset(&key_ipv6, 0xff, sizeof(key_ipv6));
+		while (bpf_map_get_next_key(map_fd_ipv6, &key_ipv6, &key_ipv6) != -1) {
+			sum = 0;
+
+			assert(bpf_map_lookup_elem(map_fd_ipv6, &key_ipv6, values) == 0);
+			for (i = 0; i < nr_cpus; i++) {
+				sum += values[i];
+			}
+			inet_ntop(AF_INET6, &key_ipv6, str_ipv6, INET6_ADDRSTRLEN);
+			printf("%39s %llu pkts\n", str_ipv6, sum);
+		}
+
+		sleep(interval);
 	}
 }
 
@@ -80,6 +97,9 @@ static void usage(const char *prog)
 
 int main(int argc, char **argv)
 {
+	int cpus = bpf_num_possible_cpus();
+	printf("Running on %u CPU cores\n", cpus);
+
 	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	struct bpf_prog_load_attr prog_load_attr = {
 		.prog_type	= BPF_PROG_TYPE_XDP,
@@ -87,7 +107,7 @@ int main(int argc, char **argv)
 	struct bpf_prog_info info = {};
 	__u32 info_len = sizeof(info);
 	const char *optstr = "FSN";
-	int prog_fd, map_fd, opt;
+	int prog_fd, map_fd_ipv4, map_fd_ipv6, opt;
 	struct bpf_object *obj;
 	struct bpf_map *map;
 	char filename[256];
@@ -140,7 +160,14 @@ int main(int argc, char **argv)
 		printf("finding a map in obj file failed\n");
 		return 1;
 	}
-	map_fd = bpf_map__fd(map);
+	map_fd_ipv4 = bpf_map__fd(map);
+
+	map = bpf_map__next(map, obj);
+	if (!map) {
+		printf("finding a map in obj file failed\n");
+		return 1;
+	}
+	map_fd_ipv6 = bpf_map__fd(map);
 
 	if (!prog_fd) {
 		printf("bpf_prog_load_xattr: %s\n", strerror(errno));
@@ -162,7 +189,7 @@ int main(int argc, char **argv)
 	}
 	prog_id = info.id;
 
-	poll_stats(map_fd, 2);
+	poll_stats(map_fd_ipv4, map_fd_ipv6, 1);
 
 	return 0;
 }
