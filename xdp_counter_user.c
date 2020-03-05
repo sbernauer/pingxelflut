@@ -42,7 +42,7 @@ static void int_exit(int sig)
 
 /* simple per-protocol drop counter
  */
-static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, int interval)
+static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, char* iface_name, int interval)
 {
 	unsigned int nr_cpus = bpf_num_possible_cpus();
 	__u64 values[nr_cpus];
@@ -53,7 +53,7 @@ static void poll_stats(int map_fd_ipv4, int map_fd_ipv6, int interval)
 
 	while (1) {
 		printf("\e[1;1H\e[2J");
-		printf("Counting destination IP-Addresses of all IP packets\n\n");
+		printf("Counting destination IP-Addresses of all IP packets on interface %s\n\n", iface_name);
 		printf("|== IPv4 =================================|=================|\n");
 		__u32 key_ipv4 = UINT32_MAX;
 		while (bpf_map_get_next_key(map_fd_ipv4, &key_ipv4, &key_ipv4) != -1) {
@@ -192,7 +192,7 @@ int main(int argc, char **argv)
 	}
 	prog_id = info.id;
 
-	poll_stats(map_fd_ipv4, map_fd_ipv6, 1);
+	poll_stats(map_fd_ipv4, map_fd_ipv6, argv[optind], 1);
 
 	return 0;
 }
