@@ -17,7 +17,7 @@ struct {
     __type(value, u32);
     __uint(max_entries, WIDTH * HEIGHT);
     __uint(map_flags, BPF_F_MMAPABLE); // Needed to mmap this map later on in userspace
-} framebuffer SEC(".maps");
+} pingxelflut_framebuffer SEC(".maps");
 
 // Returns 0 if successfull. Returns XDP_DROP, if packet was malformed.
 static inline int process_ipv6_packet(void *data, u64 nh_off, void *data_end)
@@ -42,7 +42,7 @@ static inline int process_ipv6_packet(void *data, u64 nh_off, void *data_end)
     if (x >= WIDTH || y >= HEIGHT)
         return XDP_DROP;
     index = x + y * WIDTH;
-    bpf_map_update_elem(&framebuffer, &index, &rgb, BPF_ANY);
+    bpf_map_update_elem(&pingxelflut_framebuffer, &index, &rgb, BPF_ANY);
 
     return 0;
 }
