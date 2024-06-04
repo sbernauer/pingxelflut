@@ -9,6 +9,8 @@ user = ["aya"]
 
 [dependencies]
 aya = { version = "0.12", optional = true }
+# We can not use it, as we require "#![no_std]" and it pulls in the "socket2" crate
+# pingxelflut-format = { git = "https://github.com/kleinesfilmroellchen/pingxelflut", rev = "72fb1ce1da6211ab4653cfdd41dcffc84ed766b0", package = "pingxelflut" }
 
 [lib]
 path = "src/lib.rs"
