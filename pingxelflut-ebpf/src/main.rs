@@ -81,8 +81,8 @@ fn set_pixel(_ctx: XdpContext, x: u16, y: u16, rgba: u32) {
     }
 
     if let Some(ptr) = FRAMEBUFFER.get_ptr_mut(x as u32 + y as u32 * CANVAS_WIDTH as u32) {
-        // TODO: Handle alpha channel (if desired)
-        let rgb = rgba & 0xffff_fff;
-        unsafe { *ptr = rgb };
+        // TODO: Handle alpha channel (if desired). Currently we just insert as-is for maximum performance, so it's the
+        // responsibility of the userspace to ignore the alpha bits.
+        unsafe { *ptr = rgba };
     }
 }
