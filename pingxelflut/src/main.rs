@@ -1,15 +1,26 @@
-use anyhow::Context;
-use aya::programs::{Xdp, XdpFlags};
-use aya::{include_bytes_aligned, Bpf};
+use std::{
+    os::fd::{AsFd, AsRawFd},
+    slice,
+    time::Duration,
+};
+
+use anyhow::{Context, Ok};
+use aya::{
+    include_bytes_aligned,
+    programs::{Xdp, XdpFlags},
+    Bpf,
+};
 use aya_log::BpfLogger;
 use clap::Parser;
 use log::{debug, info, warn};
-use tokio::signal;
+use memmap2::MmapOptions;
+use pingxelflut_common::{CANVAS_HEIGHT, CANVAS_PIXELS, CANVAS_WIDTH};
+use tokio::{signal, time};
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[clap(short, long, default_value = "eth0")]
-    iface: String,
+    #[clap(short, long, default_value = "lo")]
+    interface: String,
 }
 
 #[tokio::main]
@@ -47,12 +58,49 @@ async fn main() -> Result<(), anyhow::Error> {
     }
     let program: &mut Xdp = bpf.program_mut("pingxelflut").unwrap().try_into()?;
     program.load()?;
-    program.attach(&opt.iface, XdpFlags::default())
+    program.attach(&opt.interface, XdpFlags::default())
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
+
+    let framebuffer_map = bpf
+        .map("FRAMEBUFFER")
+        .expect("No map with name FRAMEBUFFER found");
+    let framebuffer_fd = match &framebuffer_map {
+        aya::maps::Map::Array(map) => map.fd(),
+        _ => panic!("framebuffer must be array"),
+    };
+
+    // Memory alignment: I would have expected the mmap region to contain `u32[CANVAS_PIXELS]`.
+    // For *some* reasons the kernel padds the value size to u64, so let's use that.
+    // The array type is `u64`, we can safely read `u32` out of it anyway.
+    let mmap = MmapOptions::new()
+        .len(CANVAS_PIXELS as usize * 8)
+        .map_raw_read_only(framebuffer_fd.as_fd().as_raw_fd())?;
+    let fb: &[u64] =
+        unsafe { slice::from_raw_parts(mmap.as_mut_ptr() as _, CANVAS_PIXELS as usize) };
+
+    tokio::spawn(main_loop(fb));
 
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
     info!("Exiting...");
 
     Ok(())
+}
+
+async fn main_loop(fb: &[u64]) {
+    loop {
+        for x in 0..CANVAS_WIDTH {
+            for y in 0..CANVAS_HEIGHT {
+                let rgb =
+                    unsafe { *fb.get_unchecked(x as usize + y as usize * CANVAS_WIDTH as usize) }
+                        as u32;
+                if rgb != 0 {
+                    println!("PX {x} {y} {rgb:x}");
+                }
+            }
+        }
+        println!();
+
+        time::sleep(Duration::from_secs(1)).await;
+    }
 }
