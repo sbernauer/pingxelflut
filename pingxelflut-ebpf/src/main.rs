@@ -4,7 +4,10 @@
 use core::mem;
 
 use aya_ebpf::{
-    bindings::{xdp_action, BPF_F_MMAPABLE},
+    bindings::{
+        xdp_action::{XDP_ABORTED, XDP_DROP, XDP_PASS},
+        BPF_F_MMAPABLE,
+    },
     macros::{map, xdp},
     maps::Array,
     programs::XdpContext,
@@ -14,7 +17,8 @@ use aya_ebpf::{
 use aya_log_ebpf::info;
 use network_types::{
     eth::{EthHdr, EtherType},
-    ip::Ipv6Hdr,
+    icmp::IcmpHdr,
+    ip::{IpProto, Ipv4Hdr, Ipv6Hdr},
 };
 
 use pingxelflut_common::{CANVAS_HEIGHT, CANVAS_PIXELS, CANVAS_WIDTH};
@@ -31,7 +35,7 @@ static FRAMEBUFFER: Array<u32> = Array::with_max_entries(CANVAS_PIXELS, BPF_F_MM
 pub fn pingxelflut(ctx: XdpContext) -> u32 {
     match try_pingxelflut(ctx) {
         Ok(ret) => ret,
-        Err(_) => xdp_action::XDP_ABORTED,
+        Err(_) => XDP_ABORTED,
     }
 }
 
@@ -53,9 +57,23 @@ fn try_pingxelflut(ctx: XdpContext) -> Result<u32, ()> {
     let ethhdr: *const EthHdr = ptr_at(&ctx, 0)?;
 
     match unsafe { (*ethhdr).ether_type } {
-        EtherType::Ipv6 => {}
+        EtherType::Ipv4 => {
+            let ipv4hdr: *const Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
+            match unsafe { *ipv4hdr }.proto {
+                IpProto::Icmp => {
+                    let icmp_hdr: *const IcmpHdr = ptr_at(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
+                    return handle_icmpv4_pingxelflut(&ctx, icmp_hdr);
+                }
+                _ => {
+                    return Ok(XDP_PASS);
+                }
+            }
+        }
+        EtherType::Ipv6 => {
+            // TODO: Handle ICMP6 traffic
+        }
         _ => {
-            return Ok(xdp_action::XDP_PASS);
+            return Ok(XDP_DROP);
         }
     }
 
@@ -66,16 +84,51 @@ fn try_pingxelflut(ctx: XdpContext) -> Result<u32, ()> {
     let y = unsafe { dst.in6_u.u6_addr16.get_unchecked(5) }.to_be();
     let rgba = unsafe { dst.in6_u.u6_addr32.get_unchecked(3) }.to_be();
 
-    // info!(&ctx, "Got IPv6 with x {:x}, y {:x}, rgba {:x}", x, y, rgba);
-    // info!(&ctx, "Index: {}", x as u32 + y as u32 * CANVAS_WIDTH as u32);
+    info!(&ctx, "Got IPv6 with x {:x}, y {:x}, rgba {:x}", x, y, rgba);
+    info!(&ctx, "Index: {}", x as u32 + y as u32 * CANVAS_WIDTH as u32);
 
-    set_pixel(ctx, x, y, rgba);
+    set_pixel(&ctx, x, y, rgba);
 
-    Ok(xdp_action::XDP_PASS)
+    Ok(XDP_PASS)
 }
 
 #[inline(always)]
-fn set_pixel(_ctx: XdpContext, x: u16, y: u16, rgba: u32) {
+fn handle_icmpv4_pingxelflut(ctx: &XdpContext, icmp_hdr: *const IcmpHdr) -> Result<u32, ()> {
+    const ICMP_TYPE_ECHO_REQUEST: u8 = 8;
+    if (unsafe { *icmp_hdr }).type_ == ICMP_TYPE_ECHO_REQUEST && unsafe { *icmp_hdr }.code == 0 {
+        let kind: u8 = unsafe { *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN)? };
+        match kind {
+            0xaa => {
+                // TODO: Handle size requests
+            }
+            0xbb => {
+                // size responses can be ignored
+            }
+            0xcc => {
+                let x = u16::from_be_bytes(unsafe {
+                    *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 1)?
+                });
+                let y = u16::from_be_bytes(unsafe {
+                    *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 3)?
+                });
+                let rgba = u32::from_be_bytes(unsafe {
+                    *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 5)?
+                });
+                // info!(
+                //     ctx,
+                //     "Detected ICMP echo request packet with x: {}, y: {}, rgba: {}", x, y, rgba
+                // );
+                set_pixel(&ctx, x, y, rgba);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(XDP_DROP)
+}
+
+#[inline(always)]
+fn set_pixel(_ctx: &XdpContext, x: u16, y: u16, rgba: u32) {
     if x >= CANVAS_WIDTH || y >= CANVAS_HEIGHT {
         return;
     }
