@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Ok};
+use anyhow::{Context, Result};
 use aya::{
     include_bytes_aligned,
     programs::{Xdp, XdpFlags},
@@ -12,9 +12,9 @@ use aya::{
 };
 use aya_log::BpfLogger;
 use clap::Parser;
-use log::{debug, info, warn};
+use log::{debug, error, info, trace, warn};
 use memmap2::MmapOptions;
-use pingxelflut_common::{CANVAS_HEIGHT, CANVAS_PIXELS, CANVAS_WIDTH};
+use pingxelflut_common::{CANVAS_PIXELS, CANVAS_WIDTH};
 use tokio::{io::AsyncWriteExt, net::TcpStream, signal, time};
 
 use args::Args;
@@ -26,15 +26,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     env_logger::init();
-
-    let sink = TcpStream::connect(&args.pixelflut_sink)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to connect to Pixelflut sink at {}",
-                args.pixelflut_sink
-            )
-        })?;
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
@@ -87,8 +78,25 @@ async fn main() -> Result<(), anyhow::Error> {
     let fb: &mut [u64] =
         unsafe { slice::from_raw_parts_mut(mmap.as_mut_ptr() as _, CANVAS_PIXELS as usize) };
 
-    // TODO: Spawn multiple threads
-    tokio::spawn(main_loop(fb, sink));
+    info!("Starting {} drawing threads", args.drawing_threads);
+    let thread_chunk_size = (fb.len() / args.drawing_threads as usize) + 1;
+    let mut index = 0;
+    for fb_slice in fb.chunks_mut(thread_chunk_size) {
+        let start_x = (index % CANVAS_WIDTH as usize) as u16;
+        let start_y = (index / CANVAS_WIDTH as usize) as u16;
+        index += fb_slice.len();
+
+        let sink = TcpStream::connect(&args.pixelflut_sink)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to Pixelflut sink at {}",
+                    &args.pixelflut_sink
+                )
+            })?;
+
+        tokio::spawn(drawing_thread(fb_slice, sink, args.fps, start_x, start_y));
+    }
 
     info!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
@@ -97,43 +105,58 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn main_loop(fb: &mut [u64], mut sink: TcpStream) {
+async fn drawing_thread(
+    fb_slice: &mut [u64],
+    mut sink: TcpStream,
+    fps: u32,
+    start_x: u16,
+    start_y: u16,
+) -> Result<()> {
+    let mut interval = time::interval(Duration::from_micros(1_000_000 / fps as u64));
+
     loop {
         let start = std::time::Instant::now();
+        let mut x = start_x;
+        let mut y = start_y;
 
-        let mut index = 0;
-        for y in 0..CANVAS_HEIGHT {
-            for x in 0..CANVAS_WIDTH {
-                // Instead of doing the multiplication as follows, we can simply increment the index by looping in a the
-                // clever way.
-                // let index = x as usize + y as usize * CANVAS_WIDTH as usize;
+        for rgba in fb_slice.iter_mut() {
+            // Ignore alpha channel
+            let rgb = *rgba >> 8;
 
-                let rgba = unsafe { fb.get_unchecked_mut(index) };
-                // Ignore alpha channel
-                let rgb = *rgba >> 8;
+            // Only send pixels that
+            // 1.) The server is responsible for
+            // 2.) Have changed sind the last flush
+            if rgb != 0 {
+                sink.write_all(format!("PX {x} {y} {rgb:06x}\n").as_bytes())
+                    .await
+                    .context("Failed to write to Pixelflut sink")?;
 
-                // Only send pixels that
-                // 1.) The server is responsible for
-                // 2.) Have changed sind the last flush
-                if rgb != 0 {
-                    sink.write_all(format!("PX {x} {y} {rgb:06x}\n").as_bytes())
-                        .await
-                        .expect("Failed to write to Pixelflut sink");
-                    print!("PX {x} {y} {rgb:06x}\n");
+                // Reset color back, so that we don't send the same color twice
+                *rgba = 0;
+            }
 
-                    // Reset color back, so that we don't send the same color twice
-                    *rgba = 0;
+            x += 1;
+            if x >= CANVAS_WIDTH {
+                x = 0;
+                y += 1;
+                if y >= CANVAS_WIDTH {
+                    error!("x and y run over the fb bounds. This should not happen, as no thread should get work to do that");
+                    break;
                 }
-
-                index += 1;
             }
         }
-        println!("Loop took {:#?}", start.elapsed());
+
+        let elapsed = start.elapsed();
+        trace!(
+            "Loop took {:?} ({}% of duty cycle)",
+            elapsed,
+            (elapsed.as_micros() as f32 / interval.period().as_micros() as f32 * 100.0).ceil()
+        );
 
         sink.flush()
             .await
-            .expect("Failed to flush to Pixelflut sink");
+            .context("Failed to flush to Pixelflut sink")?;
 
-        time::sleep(Duration::from_secs(1)).await;
+        interval.tick().await;
     }
 }
