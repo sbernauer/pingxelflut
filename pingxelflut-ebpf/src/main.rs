@@ -152,6 +152,8 @@ unsafe fn handle_icmpv4_pingxelflut(
                         EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 4,
                     )?);
                     let rgb = xrgb << 8;
+                    // info!(ctx, "Read rgb with x: {}, y: {}, rgb: 0x{:x}", x, y, rgb);
+
                     set_pixel(&ctx, x, y, rgb);
                     return Ok(XDP_DROP);
 
@@ -159,12 +161,13 @@ unsafe fn handle_icmpv4_pingxelflut(
                 // We don't check for exact 4 here, so that clients can send longer than needed packages because
                 // - why not?
                 } else if remaining > 4 {
-                    if let Some(rgba) = *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 5)?
-                    {
-                        info!(ctx, "Read rgba");
-                        set_pixel(&ctx, x, y, rgba);
-                        return Ok(XDP_DROP);
-                    }
+                    let rgba = u32::from_be_bytes(*ptr_at(
+                        ctx,
+                        EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 5,
+                    )?);
+
+                    // info!(ctx, "Read rgba with x: {}, y: {}, rgba: 0x{:x}", x, y, rgba);
+                    set_pixel(&ctx, x, y, rgba);
                 } else {
                     warn!(ctx, "Malformed packed - less than 3 remaining");
                     return Ok(XDP_DROP);

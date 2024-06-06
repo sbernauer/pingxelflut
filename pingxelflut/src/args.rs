@@ -5,6 +5,9 @@ pub struct Args {
     #[clap(short = 'i', long)]
     pub interface: String,
 
+    #[clap(short = 'd', long)]
+    pub disable_pixelflut_sink: bool,
+
     #[clap(short = 's', long)]
     pub pixelflut_sink: String,
 

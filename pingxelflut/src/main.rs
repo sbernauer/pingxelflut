@@ -78,24 +78,28 @@ async fn main() -> Result<(), anyhow::Error> {
     let fb: &mut [u64] =
         unsafe { slice::from_raw_parts_mut(mmap.as_mut_ptr() as _, CANVAS_PIXELS as usize) };
 
-    info!("Starting {} drawing threads", args.drawing_threads);
-    let thread_chunk_size = (fb.len() / args.drawing_threads as usize) + 1;
-    let mut index = 0;
-    for fb_slice in fb.chunks_mut(thread_chunk_size) {
-        let start_x = (index % CANVAS_WIDTH as usize) as u16;
-        let start_y = (index / CANVAS_WIDTH as usize) as u16;
-        index += fb_slice.len();
+    if args.disable_pixelflut_sink {
+        info!("Not starting drawing threads");
+    } else {
+        info!("Starting {} drawing threads", args.drawing_threads);
+        let thread_chunk_size = (fb.len() / args.drawing_threads as usize) + 1;
+        let mut index = 0;
+        for fb_slice in fb.chunks_mut(thread_chunk_size) {
+            let start_x = (index % CANVAS_WIDTH as usize) as u16;
+            let start_y = (index / CANVAS_WIDTH as usize) as u16;
+            index += fb_slice.len();
 
-        let sink = TcpStream::connect(&args.pixelflut_sink)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to Pixelflut sink at {}",
-                    &args.pixelflut_sink
-                )
-            })?;
+            let sink = TcpStream::connect(&args.pixelflut_sink)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Pixelflut sink at {}",
+                        &args.pixelflut_sink
+                    )
+                })?;
 
-        tokio::spawn(drawing_thread(fb_slice, sink, args.fps, start_x, start_y));
+            tokio::spawn(drawing_thread(fb_slice, sink, args.fps, start_x, start_y));
+        }
     }
 
     info!("Waiting for Ctrl-C...");
