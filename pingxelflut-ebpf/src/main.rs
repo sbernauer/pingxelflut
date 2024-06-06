@@ -14,14 +14,17 @@ use aya_ebpf::{
 };
 // We always need this import, so that the log event array AYA_LOGS always exists
 #[allow(unused_imports)]
-use aya_log_ebpf::info;
+use aya_log_ebpf::{info, warn};
 use network_types::{
     eth::{EthHdr, EtherType},
     icmp::IcmpHdr,
     ip::{IpProto, Ipv4Hdr, Ipv6Hdr},
 };
 
-use pingxelflut_common::{CANVAS_HEIGHT, CANVAS_PIXELS, CANVAS_WIDTH};
+use pingxelflut_common::{
+    CANVAS_HEIGHT, CANVAS_PIXELS, CANVAS_WIDTH, ICMP_TYPE_ECHO_REQUEST, MSG_GET_SIZE_REQUEST,
+    MSG_SET_PIXEL, MSG_SIZE_RESPONSE,
+};
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -53,16 +56,22 @@ fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
 }
 
 #[inline(always)]
+fn mut_ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*mut T, ()> {
+    let ptr: *const T = ptr_at(ctx, offset)?;
+    Ok(ptr as *mut T)
+}
+
+#[inline(always)]
 fn try_pingxelflut(ctx: XdpContext) -> Result<u32, ()> {
-    let ethhdr: *const EthHdr = ptr_at(&ctx, 0)?;
+    let ethhdr: *mut EthHdr = mut_ptr_at(&ctx, 0)?;
 
     match unsafe { (*ethhdr).ether_type } {
         EtherType::Ipv4 => {
-            let ipv4hdr: *const Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
-            match unsafe { *ipv4hdr }.proto {
+            let ipv4hdr: *mut Ipv4Hdr = mut_ptr_at(&ctx, EthHdr::LEN)?;
+            match unsafe { (*ipv4hdr).proto } {
                 IpProto::Icmp => {
-                    let icmp_hdr: *const IcmpHdr = ptr_at(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
-                    return handle_icmpv4_pingxelflut(&ctx, icmp_hdr);
+                    let icmp_hdr: *mut IcmpHdr = mut_ptr_at(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
+                    return unsafe { handle_icmpv4_pingxelflut(&ctx, ethhdr, ipv4hdr, icmp_hdr) };
                 }
                 _ => {
                     return Ok(XDP_PASS);
@@ -73,7 +82,7 @@ fn try_pingxelflut(ctx: XdpContext) -> Result<u32, ()> {
             // TODO: Handle ICMP6 traffic
         }
         _ => {
-            return Ok(XDP_DROP);
+            return Ok(XDP_PASS);
         }
     }
 
@@ -93,38 +102,87 @@ fn try_pingxelflut(ctx: XdpContext) -> Result<u32, ()> {
 }
 
 #[inline(always)]
-fn handle_icmpv4_pingxelflut(ctx: &XdpContext, icmp_hdr: *const IcmpHdr) -> Result<u32, ()> {
-    const ICMP_TYPE_ECHO_REQUEST: u8 = 8;
-    if (unsafe { *icmp_hdr }).type_ == ICMP_TYPE_ECHO_REQUEST && unsafe { *icmp_hdr }.code == 0 {
-        let kind: u8 = unsafe { *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN)? };
-        match kind {
-            0xaa => {
-                // TODO: Handle size requests
+unsafe fn handle_icmpv4_pingxelflut(
+    ctx: &XdpContext,
+    ethhdr: *mut EthHdr,
+    ipv4hdr: *mut Ipv4Hdr,
+    icmp_hdr: *mut IcmpHdr,
+) -> Result<u32, ()> {
+    if (*icmp_hdr).type_ == ICMP_TYPE_ECHO_REQUEST && (*icmp_hdr).code == 0 {
+        let icmp_data_len = ctx.data_end() - ctx.data() - EthHdr::LEN - Ipv4Hdr::LEN - IcmpHdr::LEN;
+        let msg_kind: *mut u8 = mut_ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN)?;
+
+        // This match is sorted descending by estimaed occourance of the command
+        match *msg_kind {
+            // Set pixel
+            MSG_SET_PIXEL => {
+                let x = u16::from_be_bytes(*ptr_at(
+                    ctx,
+                    EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 1,
+                )?);
+                let y = u16::from_be_bytes(*ptr_at(
+                    ctx,
+                    EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 3,
+                )?);
+
+                let remaining = icmp_data_len.wrapping_sub(5);
+
+                // Only rgb
+                if remaining == 3 {
+                    // We read an u32 instead of u16 + u8 here (hopefully for performance reasons), but we read one
+                    // byte on the left from the previous content
+                    let xrgb = u32::from_be_bytes(*ptr_at(
+                        ctx,
+                        EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 4,
+                    )?);
+                    let rgb = xrgb << 8;
+                    set_pixel(&ctx, x, y, rgb);
+                    return Ok(XDP_DROP);
+
+                // With alpha
+                // We don't check for exact 4 here, so that clients can send longer than needed packages because
+                // - why not?
+                } else if remaining > 4 {
+                    if let Some(rgba) = *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 5)?
+                    {
+                        info!(ctx, "Read rgba");
+                        set_pixel(&ctx, x, y, rgba);
+                        return Ok(XDP_DROP);
+                    }
+                } else {
+                    warn!(ctx, "Malformed packed - less than 3 remaining");
+                    return Ok(XDP_DROP);
+                }
             }
-            0xbb => {
+            MSG_GET_SIZE_REQUEST => {
+                info!(
+                    ctx,
+                    "[SIZE] Received size request from {:i} ({:MAC}) to {:i} ({:MAC}) with icmp_data_len: {}, icmp_type: {}, icmp_code: {}, icmp_checksum: 0x{:X}",
+                    (*ipv4hdr).src_addr.to_be(),
+                    (*ethhdr).src_addr,
+                    (*ipv4hdr).dst_addr.to_be(),
+                    (*ethhdr).dst_addr,
+                    icmp_data_len,
+                    (*icmp_hdr).type_,
+                    (*icmp_hdr).code,
+                    (*icmp_hdr).checksum,
+                );
+
+                return Ok(XDP_DROP);
+            }
+            MSG_SIZE_RESPONSE => {
                 // size responses can be ignored
+                return Ok(XDP_DROP);
             }
-            0xcc => {
-                let x = u16::from_be_bytes(unsafe {
-                    *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 1)?
-                });
-                let y = u16::from_be_bytes(unsafe {
-                    *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 3)?
-                });
-                let rgba = u32::from_be_bytes(unsafe {
-                    *ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN + IcmpHdr::LEN + 5)?
-                });
-                // info!(
-                //     ctx,
-                //     "Detected ICMP echo request packet with x: {}, y: {}, rgba: {}", x, y, rgba
-                // );
-                set_pixel(&ctx, x, y, rgba);
+            _ => {
+                // Let's keep normal ICMP traffic
+                return Ok(XDP_PASS);
             }
-            _ => {}
         }
     }
 
-    Ok(XDP_DROP)
+    // Let's keep normal ICMP traffic
+    Ok(XDP_PASS)
 }
 
 #[inline(always)]
