@@ -107,8 +107,7 @@ fn try_pingxelflut(ctx: XdpContext) -> Result<u32, ()> {
     let y = unsafe { dst.in6_u.u6_addr16.get_unchecked(5) }.to_be();
     let rgba = unsafe { dst.in6_u.u6_addr32.get_unchecked(3) }.to_be();
 
-    info!(&ctx, "Got IPv6 with x {:x}, y {:x}, rgba {:x}", x, y, rgba);
-    info!(&ctx, "Index: {}", x as u32 + y as u32 * CANVAS_WIDTH as u32);
+    // info!(&ctx, "Got IPv6 with x {}, y {}, rgba 0x{:x}", x, y, rgba);
 
     set_pixel(&ctx, x, y, rgba);
 
