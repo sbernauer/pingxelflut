@@ -143,7 +143,7 @@ async fn drawing_thread(
             if x >= CANVAS_WIDTH {
                 x = 0;
                 y += 1;
-                if y >= CANVAS_WIDTH {
+                if y >= CANVAS_WIDTH { // FIXME: Change to CANVAS_HEIGHT and fix upcoming errors
                     error!("x and y run over the fb bounds. This should not happen, as no thread should get work to do that");
                     break;
                 }
